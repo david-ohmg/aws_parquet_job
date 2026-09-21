@@ -1,0 +1,46 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="Django" />
+          <option value="azure-storage-file-share" />
+          <option value="boto3" />
+          <option value="botocore" />
+          <option value="jmespath" />
+          <option value="pydub" />
+          <option value="pyodbc" />
+          <option value="python-dateutil" />
+          <option value="python-http-client" />
+          <option value="s3transfer" />
+          <option value="sendgrid" />
+          <option value="six" />
+          <option value="starkbank-ecdsa" />
+          <option value="urllib3" />
+          <option value="twilio" />
+          <option value="psycopg2" />
+          <option value="numpy" />
+          <option value="ffmpeg" />
+          <option value="dnspython" />
+          <option value="fpdf" />
+          <option value="pymongo" />
+          <option value="arrow" />
+          <option value="schedule" />
+          <option value="dotenv-python" />
+          <option value="pandas" />
+          <option value="matplotlib" />
+          <option value="requests" />
+          <option value="openpyxl" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStringConversionWithoutDunderMethodInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredTypes">
+        <list>
+          <option value="types.NoneType" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
