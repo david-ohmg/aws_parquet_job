@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Daily Parquet access-log refresh and VoIP download writeback (migrated from a Cowork scheduled task).
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: david@onholdwizard.com
+    Description: Receives an email when a run fails. You must confirm the SNS subscription once.
+  ScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Leave DISABLED until you have run a dry run and switched off the Cowork task, otherwise both would rebuild the same partitions at the same time.
+  VoipApiBase:
+    Type: String
+    Default: https://test.onholdmediagroup.com
+    Description: Base URL of the VoIP production API.
+  VoipTokenParam:
+    Type: String
+    Default: /ohmg/voip-api/token
+    Description: SSM SecureString parameter holding the API token. Create it before the first run (see README).
+  RawLogsBucket:
+    Type: String
+    Default: ohmg-pub-logs
+  AthenaOutputBucket:
+    Type: String
+    Default: ohmg-pub-athena-output
+  GlueDatabase:
+    Type: String
+    Default: ohmg_pub_logs
+
+Resources:
+  RefreshFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ohmg-parquet-refresh-voip-writeback
+      Description: Rebuilds the trailing 7 days of the Parquet log table, then writes VoIP download dates back to the API.
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 900
+      Environment:
+        Variables:
+          GLUE_DATABASE: !Ref GlueDatabase
+          PARQUET_BUCKET: !Ref AthenaOutputBucket
+          ATHENA_OUTPUT: !Sub "s3://${AthenaOutputBucket}/"
+          VOIP_API_BASE: !Ref VoipApiBase
+          VOIP_TOKEN_PARAM: !Ref VoipTokenParam
+          EXCLUDED_IPS: "143.110.210.93"
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      LoggingConfig:
+        LogGroup: !Ref RefreshLogGroup
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: AthenaQueries
+              Effect: Allow
+              Action:
+                - athena:StartQueryExecution
+                - athena:GetQueryExecution
+                - athena:GetQueryResults
+              Resource: !Sub "arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary"
+            - Sid: GlueCatalog
+              Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:GetPartition
+                - glue:GetPartitions
+                - glue:CreatePartition
+                - glue:BatchCreatePartition
+                - glue:BatchDeletePartition
+              Resource:
+                - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabase}"
+                - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabase}/*"
+            - Sid: ReadRawLogs
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${RawLogsBucket}/*"
+            - Sid: ListRawLogs
+              Effect: Allow
+              Action:
+                - s3:ListBucket
+                - s3:GetBucketLocation
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${RawLogsBucket}"
+            - Sid: AthenaOutputReadWrite
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:AbortMultipartUpload
+                - s3:ListMultipartUploadParts
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${AthenaOutputBucket}/*"
+            - Sid: AthenaOutputList
+              Effect: Allow
+              Action:
+                - s3:ListBucket
+                - s3:GetBucketLocation
+                - s3:ListBucketMultipartUploads
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${AthenaOutputBucket}"
+            - Sid: DeleteOldParquetOnly
+              Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${AthenaOutputBucket}/converted/s3_access_logs_parquet/*"
+            - Sid: ReadApiToken
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VoipTokenParam}"
+      Events:
+        DailyRun:
+          Type: ScheduleV2
+          Properties:
+            Name: ohmg-parquet-refresh-daily
+            Description: Same time as the old Cowork task (08:00 UTC, 1:00 AM Arizona).
+            ScheduleExpression: cron(0 8 * * ? *)
+            ScheduleExpressionTimezone: UTC
+            State: !Ref ScheduleState
+
+  RefreshLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/ohmg-parquet-refresh-voip-writeback
+      RetentionInDays: 30
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: OHMG Parquet refresh alerts
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ohmg-parquet-refresh-errors
+      AlarmDescription: The refresh failed. Open the function's CloudWatch logs for the failure list.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref RefreshFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+Outputs:
+  FunctionName:
+    Value: !Ref RefreshFunction
+  AlertTopicArn:
+    Value: !Ref AlertTopic
